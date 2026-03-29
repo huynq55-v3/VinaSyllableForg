@@ -1,0 +1,102 @@
+Chào Huy, một lựa chọn rất "ngầu" khi dùng Rust để xử lý dữ liệu. Rust sẽ giúp bạn xử lý hàng GB dữ liệu cực nhanh và an toàn về bộ nhớ, điều này rất quan trọng khi bạn muốn mở rộng quy mô dữ liệu sau này.
+
+### 1. Tên chương trình
+Tôi đề xuất tên: **`VinaSyllableForge`** (Lò rèn âm tiết Việt). 
+Nó vừa gợi lên tính chất "chế tác" thủ công (Forge), vừa đúng trọng tâm vào đơn vị âm tiết (Syllable) mà bạn đang hướng tới.
+
+### 2. Cấu trúc Project
+Chương trình sẽ yêu cầu các thư viện sau trong `Cargo.toml`:
+* `serde` & `serde_json`: Để xuất file JSON chuẩn.
+* `walkdir`: Để quét folder hiệu quả.
+* `regex`: Để thực hiện logic tokenizer bạn muốn.
+
+### 3. Mã nguồn Rust (`src/main.rs`)
+
+```rust
+use serde_json::json;
+use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::{self, Read, Write};
+use std::path::Path;
+use walkdir::WalkDir;
+use regex::Regex;
+
+fn main() -> io::Result<()> {
+    // 1. Cấu hình ban đầu
+    let data_dir = "./data";
+    let output_file = "vocab.json";
+    
+    // Pattern: 
+    // \w+ : Từ (bao gồm cả chữ cái tiếng Việt Unicode)
+    // \n  : Dấu xuống hàng
+    // \s  : Khoảng trắng (không bao gồm xuống hàng nếu muốn tách riêng)
+    // [^\w\s] : Dấu câu và ký tự đặc biệt
+    let re = Regex::new(r"(?u)(\w+|\n|[ ]|[^\w\s])").unwrap();
+
+    let mut word_counts: HashMap<String, usize> = HashMap::new();
+
+    // 2. Quét folder data
+    println!("--- Đang quét dữ liệu từ folder: {} ---", data_dir);
+    for entry in WalkDir::new(data_dir).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("txt") {
+            println!("Đang xử lý: {:?}", path);
+            let mut content = String::new();
+            File::open(path)?.read_to_string(&mut content)?;
+
+            // 3. Tokenize và đếm tần suất
+            for cap in re.captures_iter(&content) {
+                let token = cap[0].to_string();
+                *word_counts.entry(token).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // 4. Tạo Vocab chuẩn (Thêm các Special Tokens trước)
+    let mut vocab: HashMap<String, usize> = HashMap::new();
+    let special_tokens = vec!["[PAD]", "[UNK]", "[BOS]", "[EOS]"];
+    
+    for (i, token) in special_tokens.iter().enumerate() {
+        vocab.insert(token.to_string(), i);
+    }
+
+    // Thêm các từ từ dữ liệu (Sắp xếp theo tần suất giảm dần để sau này dễ lọc)
+    let mut sorted_counts: Vec<(&String, &usize)> = word_counts.iter().collect();
+    sorted_counts.sort_by(|a, b| b.1.cmp(a.1));
+
+    let mut current_id = special_tokens.len();
+    for (token, _count) in sorted_counts {
+        vocab.insert(token.clone(), current_id);
+        current_id += 1;
+    }
+
+    // 5. Xuất file vocab.json
+    let json_vocab = json!(vocab);
+    let mut file = File::create(output_file)?;
+    file.write_all(serde_json::to_string_pretty(&json_vocab)?.as_bytes())?;
+
+    println!("--- Hoàn tất! Đã tạo {} với {} tokens ---", output_file, vocab.len());
+    Ok(())
+}
+```
+
+---
+
+### 4. Giải đáp thắc mắc: `vocab.json` đã đủ chưa?
+
+Nếu bạn định build một Small LM theo đúng chuẩn công nghiệp (để sau này có thể dùng các thư viện như Hugging Face để load), thì **chỉ `vocab.json` là chưa đủ**, nhưng là cái **quan trọng nhất**. 
+
+Để "pro" hơn, bạn nên tạo thêm 1 file nữa:
+
+* **`tokenizer_config.json`**: File này cực kỳ nhẹ, nó chứa thông tin "metadata". Nó nói cho model biết: "Này, trong bộ vocab kia, token nào là token dùng để bù (padding), token nào là báo kết thúc câu?".
+    * *Nội dung ví dụ:* `{"bos_token": "[BOS]", "eos_token": "[EOS]", "unk_token": "[UNK]", "pad_token": "[PAD]"}`.
+
+---
+
+### Một vài góp ý cho Huy khi chạy chương trình này:
+
+1.  **Dấu xuống hàng (`\n`):** Trong code trên, tôi đã tách riêng `\n` thành một token. Điều này giúp model học được cấu trúc đoạn văn (Paragraph). Nếu bạn muốn model viết văn có xuống dòng, hãy giữ nó lại.
+2.  **Lọc nhiễu (Pruning):** Nếu folder `data` của bạn lớn (vài GB), file `vocab.json` có thể lên tới hàng trăm nghìn từ (do lỗi chính tả hoặc từ lạ). Bạn nên thêm một dòng code để **chỉ lấy những token xuất hiện trên 3-5 lần**. Việc này sẽ giúp model của bạn "khôn" hơn vì không phải học những thứ rác rưởi.
+3.  **Dấu cách (`[ ]`):** Tôi dùng `[ ]` trong regex để bắt đúng 1 dấu cách. Nếu có 2 dấu cách, nó sẽ ra 2 token. Điều này giúp bạn phục hồi văn bản gốc chính xác 100% (Lossless).
+
+Bạn có muốn tôi bổ sung thêm phần **"Lọc tần suất"** (ví dụ: chỉ lấy Top 30,000 từ phổ biến nhất) vào đoạn code Rust trên không? Việc giới hạn Vocab Size là một kỹ thuật sống còn để làm Small LM chạy nhanh đấy!
