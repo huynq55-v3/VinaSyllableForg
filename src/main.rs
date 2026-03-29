@@ -10,7 +10,7 @@ fn main() -> io::Result<()> {
     let output_file = "vocab.json";
 
     // Bộ lọc Regex mạnh mẽ hơn
-    let re = Regex::new(r"(?u)(\n|\t|[ ]|\\{1,2}[\w]|\w+|[^\w\s])").unwrap();
+    let re = Regex::new(r"(?u)(\n|\t|[ ]|\\{1,2}[\w]|_|[^\W_]+|[^\w\s])").unwrap();
     let mut word_counts: HashMap<String, usize> = HashMap::new();
 
     for entry in WalkDir::new(data_dir).into_iter().filter_map(|e| e.ok()) {
